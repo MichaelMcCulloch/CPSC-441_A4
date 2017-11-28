@@ -6,10 +6,10 @@
     "configurations": [
         {
             "type": "java",
-            "name": "Debug (Launch)-Main<CPSC-441_A4>",
+            "name": "Debug (Launch)-Router<CPSC-441_A4>",
             "request": "launch",
             "cwd": "${workspaceFolder}",
-            "mainClass": "Main",
+            "mainClass": "Router",
             "projectName": "CPSC-441_A4",
             "args": ""
         },
