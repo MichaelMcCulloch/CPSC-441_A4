@@ -3,7 +3,6 @@ import java.io.*;
 import java.net.Socket;
 import java.util.*;
 
-
 import cpsc441.a4.shared.*;
 
 /**
@@ -34,6 +33,7 @@ public class Router {
 	private int updateInterval;
 	private RtnTable[] myRtnTables;
 	private Timer timer;
+	private List<Integer> neighbors;
 
 	/**
 	 * Constructor to initialize the rouer instance 
@@ -56,16 +56,15 @@ public class Router {
 		this.routerId = routerId;
 		this.updateInterval = updateInterval;
 		this.timer = new Timer();
-		
-		timer.schedule(new TimerTask(){
-		
+
+		timer.schedule(new TimerTask() {
+
 			@Override
 			public void run() {
 				broadcastMinCost();
 			}
-		}, updateInterval*5, updateInterval);
-		
-		// to be completed
+		}, updateInterval * 5, updateInterval);
+
 	}
 
 	/**
@@ -115,69 +114,68 @@ public class Router {
 
 	}
 
-	private int getDistance(int src, int dest) {
-		return myRtnTables[src].getMinCost()[dest];
+	private Integer getDistance(int src, int dest) {
+		try {
+			return myRtnTables[src].getMinCost()[dest];
+		} catch (Exception e) {
+			return null; //If the value is not present, skip it
+		}
+
 	}
 
-	
-
 	private void processROUTE(DvrPacket dvr) {
+		boolean newTable = false;
 		//insert the new dVect
 		if (dvr.sourceid == DvrPacket.SERVER) {
-			myRtnTables[routerId] = new RtnTable(dvr.mincost, new int[dvr.mincost.length]);
+			newTable = true;
+			int[] minCost = dvr.getMinCost();
+
+			myRtnTables[routerId] = new RtnTable(minCost, new int[minCost.length]);
+			//repopulate neighbors table
+			neighbors = new ArrayList<>();
+			for(int i = 0; i < minCost.length; i++){
+				if (i != routerId && minCost[i] < 900)
+					neighbors.add(i);
+			}
 		} else {
 			myRtnTables[dvr.sourceid] = new RtnTable(dvr.mincost, new int[dvr.mincost.length]);
 		}
 
-		//We can't fully update the table, if entries are missing.
-		boolean routingTableIsFull = true;
-		for (RtnTable tbl : myRtnTables) {
-			if (tbl == null) {
-				routingTableIsFull = false;
-				break;
-			}
-		}
+		int[] oldTableRef = myRtnTables[routerId].getMinCost();
+		int[] oldDV = Arrays.copyOf(oldTableRef, oldTableRef.length);
 
-		//do bellman-ford when we have all the tables
 		int[] newMinCost = new int[myRtnTables.length];
 		int[] newNextHop = new int[myRtnTables.length];
-		if (routingTableIsFull) {
-			
-			int[] oldTableRef = myRtnTables[routerId].getMinCost();
-			int[] oldDV = Arrays.copyOf(oldTableRef, oldTableRef.length);
-			
-			System.out.println("Tbl Full");
-			for (int r = 0; r < myRtnTables.length; r++) {
-				if (r == routerId) {
-					newMinCost[r] = 0;
-					newNextHop[r] = r;
+
+		for (int end = 0; end < myRtnTables.length; end++) {
+			//If we are on our own node, or the dv is still unavailable, skip it;
+			if (end == routerId) {
+				newMinCost[end] = oldDV[end];
+				newNextHop[end] = routerId;
+				continue;
+			}
+			int minCost = oldDV[end], minNext = 0;
+			for (int mid = 0; mid < myRtnTables.length; mid++) {
+				if (mid == routerId || myRtnTables[mid] == null)
 					continue;
-				}
-				int minCost = Integer.MAX_VALUE, minNext = Integer.MAX_VALUE;
-				for (int n = 0; n < myRtnTables.length; n++) {
-					if (n == routerId)
-						continue;
-					int cin = getDistance(routerId, n); // c(x,y)
-					int dnr = getDistance(n, r); //Dy(z);
-					if (dnr > 900 || cin > 900)
-						continue;
+				Integer cin = getDistance(routerId, mid); // c(x,y)
+				Integer dnr = getDistance(mid, end); //Dy(z);
+				if (cin != null && dnr != null) {
 					int candidate = cin + dnr;
-					if (candidate < minCost) {
+					if (candidate <= minCost) {
 						minCost = candidate;
-						minNext = n;
+						minNext = mid;
 					}
 				}
-				newMinCost[r] = minCost;
-				newNextHop[r] = minNext;
-			}
-			myRtnTables[routerId] = new RtnTable(newMinCost, newNextHop);
-			
-			//forward my new table only if it changed
-			if (!Arrays.equals(oldDV, newMinCost))
-				broadcastMinCost();
-		}
-		
 
+			}
+			newMinCost[end] = minCost;
+			newNextHop[end] = minNext;
+		}
+		myRtnTables[routerId] = new RtnTable(newMinCost, newNextHop);
+		//forward my new table only if it changed or if it was sent from the server
+		if (!Arrays.equals(oldDV, newMinCost) || newTable)
+			broadcastMinCost();
 
 	}
 
@@ -185,18 +183,14 @@ public class Router {
 		try {
 			// send my min cost to all neighbors
 			int[] myMinCost = myRtnTables[routerId].getMinCost();
-			for (int i = 0; i < myMinCost.length; i++) {
-				if (myRtnTables[routerId].getMinCost()[i] > 900) continue;
-				if (i != routerId) {
-					
-					toServer.writeObject(new DvrPacket(routerId, i, DvrPacket.ROUTE, myMinCost));
-				}
+
+			for (int neighbor : neighbors) {
+				toServer.writeObject(new DvrPacket(routerId, neighbor, DvrPacket.ROUTE, myMinCost));
 			}
 		} catch (Exception e) {
 			System.err.println(e);
 		}
 	}
-
 
 	/**
 	 * A simple test driver
@@ -204,16 +198,18 @@ public class Router {
 	 */
 	public static void main(String[] args) {
 		// default parameters
-		
-		int[] a = {1,2,3};
-		int[] b = {1,2,3};
-		if (Arrays.equals(a, b)) System.out.println("SAME");
-		else System.out.println("DIFF");
+
+		int[] a = { 1, 2, 3 };
+		int[] b = { 1, 2, 3 };
+		if (Arrays.equals(a, b))
+			System.out.println("SAME");
+		else
+			System.out.println("DIFF");
 		int routerId = 0;
 		String serverName = "localhost";
 		int serverPort = 8887;
 		int updateInterval = 1000; //milli-seconds
-	
+
 		if (args.length == 4) {
 			routerId = Integer.parseInt(args[0]);
 			serverName = args[1];
@@ -222,23 +218,23 @@ public class Router {
 		} else {
 			System.out.println("incorrect usage, using defaults.");
 		}
-	
+
 		// print the parameters
 		System.out.printf("starting Router #%d with parameters:\n", routerId);
 		System.out.printf("Relay server host name: %s\n", serverName);
 		System.out.printf("Relay server port number: %d\n", serverPort);
 		System.out.printf("Routing update intwerval: %d (milli-seconds)\n", updateInterval);
-	
+
 		// start the router
 		// the start() method blocks until the router receives a QUIT message
 		Router router = new Router(routerId, serverName, serverPort, updateInterval);
 		RtnTable rtn = router.start();
 		System.out.println("Router terminated normally");
-	
+
 		// print the computed routing table
 		System.out.println();
 		System.out.println("Routing Table at Router #" + routerId);
 		System.out.print(rtn.toString());
 	}
-	
+
 }
