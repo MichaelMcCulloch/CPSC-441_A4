@@ -1,4 +1,7 @@
-
+/**
+ * Michael McCulloch
+ * CPSC 441 A4
+ */
 import java.io.*;
 import java.net.Socket;
 import java.util.*;
